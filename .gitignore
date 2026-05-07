@@ -1,0 +1,38 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.env
+.env
+
+# Build output
+dist/
+build/
+
+# Logs
+logs/
+*.log
+
+# MacOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Resume uploads
+resumes/
+
+# Docker
+*.dockerignore
+
+# Misc
+.idea/

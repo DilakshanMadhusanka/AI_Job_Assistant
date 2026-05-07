@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: job-recommendation-mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+    volumes:
+      - mongodb_data:/data/db
+
+  backend:
+    build: ./server
+    container_name: job-recommendation-backend
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - MONGO_URI=mongodb://admin:password@mongodb:27017/job-recommendation?authSource=admin
+      - JWT_SECRET=your_jwt_secret_here
+      - AI_SERVICE_URL=http://ai-service:8000
+    depends_on:
+      - mongodb
+      - ai-service
+
+  ai-service:
+    build: ./ai-service
+    container_name: job-recommendation-ai
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+
+  frontend:
+    build: ./client
+    container_name: job-recommendation-frontend
+    restart: always
+    ports:
+      - "3000:3000"
+
+volumes:
+  mongodb_data:
