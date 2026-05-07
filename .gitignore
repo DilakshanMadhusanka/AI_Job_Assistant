@@ -13,6 +13,7 @@ __pycache__/
 *.pyd
 *.env
 .env
+.env.example
 
 # Build output
 dist/
