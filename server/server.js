@@ -50,15 +50,12 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // Database connection
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/job-recommendation';
+const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://madhusankamrd_db_user:JwNoFtmR7chUfoOg@cluster0.mq3bbks.mongodb.net/?appName=Cluster0';
 if (!process.env.MONGO_URI) {
   console.warn('MONGO_URI is not set. Defaulting to local MongoDB at mongodb://127.0.0.1:27017/job-recommendation.');
 }
 
-mongoose.connect(MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
+mongoose.connect(MONGO_URI)
 .then(() => console.log('MongoDB connected'))
 .catch(err => console.error('MongoDB connection error:', err));
 
