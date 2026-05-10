@@ -132,14 +132,19 @@ const fetchJobsFromAPIs = async (query = '', location = '', limit = 10) => {
 // Get job recommendations for user
 router.get('/recommendations/:userId', require('../middleware/auth'), async (req, res) => {
   try {
-    const user = await User.findById(req.params.userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+    // Validate userId
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid user session' });
     }
 
-    // Check access
-    if (req.user.userId !== req.params.userId) {
+    // Ensure the userId in params matches the authenticated user
+    if (req.user.userId.toString() !== req.params.userId) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
     }
 
     // Get user's skills and preferences
@@ -180,6 +185,11 @@ router.get('/recommendations/:userId', require('../middleware/auth'), async (req
 // Save a job
 router.post('/save', require('../middleware/auth'), async (req, res) => {
   try {
+    // Validate userId
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid user session' });
+    }
+
     const { jobId, title, company, location, salary, employmentType, applyUrl, source } = req.body;
 
     const user = await User.findById(req.user.userId);
@@ -216,6 +226,11 @@ router.post('/save', require('../middleware/auth'), async (req, res) => {
 // Remove a saved job
 router.delete('/save/:jobId', require('../middleware/auth'), async (req, res) => {
   try {
+    // Validate userId
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid user session' });
+    }
+
     const user = await User.findById(req.user.userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -234,13 +249,19 @@ router.delete('/save/:jobId', require('../middleware/auth'), async (req, res) =>
 // Get saved jobs
 router.get('/saved/:userId', require('../middleware/auth'), async (req, res) => {
   try {
+    // Validate userId
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid user session' });
+    }
+
+    // Ensure the userId in params matches the authenticated user
+    if (req.user.userId.toString() !== req.params.userId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     const user = await User.findById(req.params.userId).select('savedJobs');
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
-    }
-
-    if (req.user.userId !== req.params.userId) {
-      return res.status(403).json({ error: 'Access denied' });
     }
 
     res.json(user.savedJobs);
@@ -265,6 +286,11 @@ router.get('/search', async (req, res) => {
 // Get career advice
 router.post('/career-advice', require('../middleware/auth'), async (req, res) => {
   try {
+    // Validate userId
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid user session' });
+    }
+
     const { careerGoals } = req.body;
     const user = await User.findById(req.user.userId);
 
@@ -287,6 +313,11 @@ router.post('/career-advice', require('../middleware/auth'), async (req, res) =>
 // Get resume feedback
 router.post('/resume-feedback', require('../middleware/auth'), async (req, res) => {
   try {
+    // Validate userId
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid user session' });
+    }
+
     const { jobDescription } = req.body;
     const user = await User.findById(req.user.userId);
 
@@ -313,6 +344,11 @@ router.post('/resume-feedback', require('../middleware/auth'), async (req, res) 
 // Get interview preparation
 router.post('/interview-prep', require('../middleware/auth'), async (req, res) => {
   try {
+    // Validate userId
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid user session' });
+    }
+
     const { jobTitle } = req.body;
     const user = await User.findById(req.user.userId);
 
@@ -335,6 +371,11 @@ router.post('/interview-prep', require('../middleware/auth'), async (req, res) =
 // Get course recommendations
 router.post('/course-recommendations', require('../middleware/auth'), async (req, res) => {
   try {
+    // Validate userId
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid user session' });
+    }
+
     const { targetSkills } = req.body;
     const user = await User.findById(req.user.userId);
 

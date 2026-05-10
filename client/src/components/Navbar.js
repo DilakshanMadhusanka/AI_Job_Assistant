@@ -18,7 +18,7 @@ const Navbar = () => {
         <div className="flex justify-between items-center py-4">
           <Link to="/" className="flex items-center space-x-2">
             <Briefcase className="h-8 w-8 text-blue-600" />
-            <span className="text-xl font-bold text-gray-800">AI Job Recommendation System</span>
+            <span className="text-xl font-bold text-gray-800">AI Job Assistant</span>
           </Link>
 
           <div className="flex items-center space-x-4">

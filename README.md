@@ -93,7 +93,16 @@ job-recommendation-system/
    pip install -r requirements.txt
    ```
 
-4. Start the AI service:
+4. Copy `.env.example` to `.env` and update values as needed:
+   ```bash
+   cp .env.example .env
+   ```
+   Then edit `.env` to set your values, for example:
+   ```env
+   OPENAI_API_KEY=your_openai_api_key_here
+   ```
+
+5. Start the AI service:
    ```bash
    uvicorn app.main:app --reload
    ```

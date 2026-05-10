@@ -2,18 +2,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
-import spacy
-import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import re
-import nltk
-from nltk.corpus import stopwords
+import openai
+import os
+import json
+from dotenv import load_dotenv
 
-# Download NLTK data
-nltk.download('stopwords')
-nltk.download('punkt')
+# Load local environment variables from ai-service/.env
+load_dotenv()
 
 app = FastAPI(title="AI Job Recommendation Service")
 
@@ -26,14 +21,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load models
-try:
-    nlp = spacy.load("en_core_web_sm")
-    sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
-except OSError:
-    # If models not available, we'll handle this in the endpoints
-    nlp = None
-    sentence_model = None
+# OpenAI API setup
+openai.api_key = os.getenv("OPENAI_API_KEY")
+if not openai.api_key:
+    raise ValueError("OPENAI_API_KEY environment variable is not set")
 
 # Data models
 class ResumeParseRequest(BaseModel):
@@ -91,256 +82,84 @@ class InterviewPrep(BaseModel):
 class CourseRecommendation(BaseModel):
     courses: List[Dict[str, str]]
     learningPath: List[str]
-def extract_skills(text: str) -> List[str]:
-    """Extract technical skills from text using NLP"""
-    if not nlp:
-        return []
 
-    doc = nlp(text.lower())
+def call_openai_api(prompt: str, max_tokens: int = 1000) -> str:
+    """Call OpenAI API with a prompt"""
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=0.7
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
 
-    # Common technical skills
-    tech_skills = [
-        'python', 'javascript', 'java', 'c++', 'c#', 'php', 'ruby', 'go', 'rust',
-        'react', 'angular', 'vue', 'node.js', 'express', 'django', 'flask',
-        'html', 'css', 'sass', 'bootstrap', 'tailwind',
-        'sql', 'mysql', 'postgresql', 'mongodb', 'redis',
-        'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'git',
-        'machine learning', 'ai', 'nlp', 'tensorflow', 'pytorch',
-        'linux', 'windows', 'macos'
-    ]
+def parse_json_response(response: str) -> Dict[str, Any]:
+    """Parse JSON response from OpenAI."""
+    try:
+        # If AI returns a JSON string directly, parse it first.
+        return json.loads(response)
+    except json.JSONDecodeError:
+        pass
 
-    skills = []
-    for token in doc:
-        if token.text in tech_skills and token.text not in skills:
-            skills.append(token.text)
+    try:
+        # Remove markdown fences and surrounding text before JSON extraction.
+        sanitized = response.strip()
+        if sanitized.startswith('```'):
+            sanitized = sanitized.strip('`').strip()
 
-    return skills
+        start = sanitized.find('{')
+        end = sanitized.rfind('}') + 1
+        if start != -1 and end != -1 and end > start:
+            json_str = sanitized[start:end]
+            return json.loads(json_str)
 
-def extract_experience(text: str) -> List[Dict[str, Any]]:
-    """Extract work experience from resume text"""
-    experience = []
-
-    # Simple regex patterns for experience extraction
-    patterns = [
-        r'(\d+)\s*years?\s*(?:of)?\s*experience',
-        r'(\d+)\+\s*years?\s*(?:of)?\s*experience',
-        r'experience:\s*(.+)'
-    ]
-
-    for pattern in patterns:
-        matches = re.findall(pattern, text, re.IGNORECASE)
-        if matches:
-            experience.extend(matches)
-
-    return experience
-
-def extract_education(text: str) -> List[Dict[str, Any]]:
-    """Extract education information"""
-    education = []
-
-    # Common degrees
-    degrees = ['bachelor', 'master', 'phd', 'associate', 'certificate']
-
-    for degree in degrees:
-        if degree in text.lower():
-            education.append({'degree': degree})
-
-    return education
-
-def calculate_similarity(user_profile: Dict[str, Any], job: Dict[str, Any]) -> float:
-    """Calculate similarity score between user profile and job"""
-    if not sentence_model:
-        return 0.0
-
-    # Combine user skills and experience
-    user_text = ' '.join(user_profile.get('skills', []))
-    user_text += ' ' + ' '.join([exp.get('title', '') for exp in user_profile.get('experience', [])])
-
-    # Combine job requirements
-    job_text = job.get('title', '') + ' ' + job.get('description', '')
-    job_text += ' ' + ' '.join(job.get('skills', []))
-
-    # Generate embeddings
-    user_embedding = sentence_model.encode([user_text])
-    job_embedding = sentence_model.encode([job_text])
-
-    # Calculate cosine similarity
-    similarity = cosine_similarity(user_embedding, job_embedding)[0][0]
-
-    return float(similarity * 100)  # Convert to percentage
-
-def generate_recommendation_reasons(user_profile: Dict[str, Any], job: Dict[str, Any], score: float) -> List[str]:
-    """Generate reasons why this job was recommended"""
-    reasons = []
-
-    user_skills = set(user_profile.get('skills', []))
-    job_skills = set(job.get('skills', []))
-
-    skill_matches = user_skills.intersection(job_skills)
-    if skill_matches:
-        reasons.append(f"Matches your skills: {', '.join(skill_matches)}")
-
-    if score > 70:
-        reasons.append("High overall match with your profile")
-    elif score > 50:
-        reasons.append("Good match with your experience level")
-
-    # Location match
-    user_location = user_profile.get('location', '').lower()
-    job_location = job.get('location', '').lower()
-    if user_location and user_location in job_location:
-        reasons.append("Location matches your preferences")
-
-    return reasons
-
-def analyze_resume_quality(text: str) -> Dict[str, Any]:
-    """Analyze resume quality and provide feedback"""
-    analysis = {
-        'length': len(text.split()),
-        'has_contact': bool(re.search(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b|\S+@\S+\.\S+', text)),
-        'has_skills': len(extract_skills(text)) > 0,
-        'has_experience': len(extract_experience(text)) > 0,
-        'has_education': len(extract_education(text)) > 0,
-        'sections': []
-    }
-
-    # Check for common sections
-    sections = ['experience', 'education', 'skills', 'projects', 'certifications']
-    for section in sections:
-        if section.lower() in text.lower():
-            analysis['sections'].append(section)
-
-    return analysis
-
-def generate_skill_gaps(user_skills: List[str], job_skills: List[str]) -> List[str]:
-    """Identify skill gaps between user and job requirements"""
-    user_skill_set = set(user_skills)
-    job_skill_set = set(job_skills)
-
-    gaps = job_skill_set - user_skill_set
-    return list(gaps)
-
-def generate_interview_questions(job_title: str, user_profile: Dict[str, Any]) -> Dict[str, List[str]]:
-    """Generate interview questions based on job title and user profile"""
-    questions = {
-        'common': [
-            'Tell me about yourself',
-            'What are your strengths and weaknesses?',
-            'Why are you interested in this position?',
-            'Where do you see yourself in 5 years?',
-            'Why do you want to work for our company?'
-        ],
-        'technical': [],
-        'behavioral': []
-    }
-
-    # Generate technical questions based on skills
-    user_skills = user_profile.get('skills', [])
-    if 'python' in user_skills:
-        questions['technical'].extend([
-            'Explain Python decorators and their use cases',
-            'How does Python memory management work?',
-            'Describe list comprehensions and when to use them'
-        ])
-
-    if 'javascript' in user_skills:
-        questions['technical'].extend([
-            'Explain closures in JavaScript',
-            'What is the difference between let, const, and var?',
-            'How does the event loop work in JavaScript?'
-        ])
-
-    if 'react' in user_skills:
-        questions['technical'].extend([
-            'Explain the virtual DOM in React',
-            'What are hooks in React and why were they introduced?',
-            'How do you manage state in a React application?'
-        ])
-
-    # Job-specific questions
-    job_lower = job_title.lower()
-    if 'frontend' in job_lower or 'ui' in job_lower:
-        questions['technical'].extend([
-            'How do you ensure cross-browser compatibility?',
-            'Explain responsive design principles',
-            'What tools do you use for debugging frontend issues?'
-        ])
-
-    if 'backend' in job_lower or 'server' in job_lower:
-        questions['technical'].extend([
-            'How do you handle database connections and queries?',
-            'Explain RESTful API design principles',
-            'How do you implement authentication and authorization?'
-        ])
-
-    return questions
-
-def recommend_courses(skill_gaps: List[str]) -> List[Dict[str, str]]:
-    """Recommend courses for skill gaps"""
-    course_recommendations = []
-
-    course_map = {
-        'python': [
-            {'title': 'Python for Everybody', 'platform': 'Coursera', 'url': 'https://www.coursera.org/specializations/python'},
-            {'title': 'Complete Python Bootcamp', 'platform': 'Udemy', 'url': 'https://www.udemy.com/course/complete-python-bootcamp/'}
-        ],
-        'javascript': [
-            {'title': 'JavaScript Algorithms and Data Structures', 'platform': 'freeCodeCamp', 'url': 'https://www.freecodecamp.org/learn/javascript-algorithms-and-data-structures/'},
-            {'title': 'Modern JavaScript From The Beginning', 'platform': 'Udemy', 'url': 'https://www.udemy.com/course/modern-javascript-from-the-beginning/'}
-        ],
-        'react': [
-            {'title': 'React - The Complete Guide', 'platform': 'Udemy', 'url': 'https://www.udemy.com/course/react-the-complete-guide-incl-redux/'},
-            {'title': 'React Fundamentals', 'platform': 'Codecademy', 'url': 'https://www.codecademy.com/learn/react-101'}
-        ],
-        'node.js': [
-            {'title': 'Node.js Complete Guide', 'platform': 'Udemy', 'url': 'https://www.udemy.com/course/nodejs-the-complete-guide/'},
-            {'title': 'Learn Node.js', 'platform': 'Codecademy', 'url': 'https://www.codecademy.com/learn/learn-node-js'}
-        ],
-        'machine learning': [
-            {'title': 'Machine Learning by Andrew Ng', 'platform': 'Coursera', 'url': 'https://www.coursera.org/learn/machine-learning'},
-            {'title': 'Practical Machine Learning', 'platform': 'edX', 'url': 'https://www.edx.org/course/practical-machine-learning'}
-        ]
-    }
-
-    for skill in skill_gaps:
-        skill_lower = skill.lower()
-        if skill_lower in course_map:
-            course_recommendations.extend(course_map[skill_lower][:2])  # Limit to 2 courses per skill
-
-    return course_recommendations[:5]  # Limit total recommendations
+        return {"error": "No JSON found in response"}
+    except json.JSONDecodeError:
+        return {"error": "Invalid JSON in response"}
 
 # API endpoints
 @app.post("/parse-resume", response_model=Dict[str, Any])
 async def parse_resume(request: ResumeParseRequest):
-    """Parse resume text and extract structured information"""
+    """Parse resume text and extract structured information using AI"""
     try:
-        text = request.text
+        if not request.text or not request.text.strip():
+            raise HTTPException(status_code=400, detail="Resume text is required and cannot be empty")
 
-        # Extract information
-        skills = extract_skills(text)
-        experience = extract_experience(text)
-        education = extract_education(text)
+        prompt = f"""
+        Analyze the following resume text and extract key information in valid JSON format.
 
-        # Simple certification extraction
-        certifications = []
-        cert_patterns = ['certified', 'certificate', 'certification']
-        for pattern in cert_patterns:
-            if pattern in text.lower():
-                certifications.append(pattern.title())
+        Resume Text:
+        {request.text}
 
-        return {
-            'skills': skills,
-            'experience': experience,
-            'education': education,
-            'certifications': certifications
-        }
+        Please return ONLY a JSON object with the following structure, without any markdown, commentary, or extra text:
+        {{
+            "skills": ["list", "of", "technical", "skills"],
+            "experience": ["list", "of", "experience", "items"],
+            "education": ["list", "of", "education", "items"],
+            "certifications": ["list", "of", "certifications"]
+        }}
 
+        Focus on technical skills, work experience, education, and certifications.
+        """
+
+        response = call_openai_api(prompt, max_tokens=1500)
+        parsed_data = parse_json_response(response)
+        if not parsed_data or isinstance(parsed_data, dict) and parsed_data.get('error'):
+            raise HTTPException(status_code=500, detail=f"Error parsing resume: {parsed_data.get('error', 'Invalid JSON response from AI')}" )
+
+        return parsed_data
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error parsing resume: {str(e)}")
 
 @app.post("/recommend-jobs", response_model=RecommendationResponse)
 async def recommend_jobs(request: JobRecommendationRequest):
-    """Generate job recommendations based on user profile"""
+    """Generate job recommendations based on user profile using AI"""
     try:
         user_profile = request.userProfile
         jobs = request.jobs
@@ -348,36 +167,39 @@ async def recommend_jobs(request: JobRecommendationRequest):
         recommendations = []
 
         for job in jobs:
-            # Calculate similarity score
-            score = calculate_similarity(user_profile, job)
+            prompt = f"""
+            Compare the following user profile with the job description and provide a recommendation score and analysis.
 
-            # Generate reasons
-            reasons = generate_recommendation_reasons(user_profile, job, score)
+            User Profile:
+            {json.dumps(user_profile, indent=2)}
 
-            # Check matches
-            user_skills = set(user_profile.get('skills', []))
-            job_skills = set(job.get('skills', []))
-            skill_matches = list(user_skills.intersection(job_skills))
+            Job Description:
+            {json.dumps(job, indent=2)}
 
-            # Simple location match
-            location_match = False
-            if user_profile.get('location') and job.get('location'):
-                location_match = user_profile['location'].lower() in job['location'].lower()
+            Please return a JSON object with the following structure:
+            {{
+                "score": <number between 0-100>,
+                "reasons": ["list", "of", "reasons", "for", "recommendation"],
+                "skillMatches": ["list", "of", "matching", "skills"],
+                "experienceMatch": <boolean>,
+                "locationMatch": <boolean>,
+                "salaryMatch": <boolean>
+            }}
 
-            # Simple salary match (placeholder)
-            salary_match = True  # Could implement more sophisticated logic
+            Be realistic about the matches and provide specific reasons.
+            """
 
-            # Experience match (placeholder)
-            experience_match = True
+            response = call_openai_api(prompt, max_tokens=1000)
+            analysis = parse_json_response(response)
 
             recommendation = Recommendation(
-                jobId=job['jobId'],
-                score=round(score, 2),
-                reasons=reasons,
-                skillMatches=skill_matches,
-                experienceMatch=experience_match,
-                locationMatch=location_match,
-                salaryMatch=salary_match
+                jobId=job.get('jobId', ''),
+                score=float(analysis.get('score', 0)),
+                reasons=analysis.get('reasons', []),
+                skillMatches=analysis.get('skillMatches', []),
+                experienceMatch=analysis.get('experienceMatch', False),
+                locationMatch=analysis.get('locationMatch', False),
+                salaryMatch=analysis.get('salaryMatch', False)
             )
 
             recommendations.append(recommendation)
@@ -392,60 +214,37 @@ async def recommend_jobs(request: JobRecommendationRequest):
 
 @app.post("/career-advice", response_model=CareerAdvice)
 async def get_career_advice(request: CareerAdviceRequest):
-    """Provide personalized career advice based on user profile"""
+    """Provide personalized career advice based on user profile using AI"""
     try:
         user_profile = request.userProfile
-        career_goals = request.careerGoals
+        career_goals = request.careerGoals or "Not specified"
 
-        skills = user_profile.get('skills', [])
-        experience = user_profile.get('experience', [])
-        education = user_profile.get('education', [])
+        prompt = f"""
+        Provide personalized career advice based on the following user profile and career goals.
 
-        # Analyze current situation
-        experience_level = 'entry' if len(experience) < 2 else 'mid' if len(experience) < 5 else 'senior'
-        skill_count = len(skills)
+        User Profile:
+        {json.dumps(user_profile, indent=2)}
 
-        # Generate advice
-        advice_parts = []
+        Career Goals:
+        {career_goals}
 
-        if experience_level == 'entry':
-            advice_parts.append("You're at an early stage in your career. Focus on building a strong foundation and gaining diverse experience.")
-        elif experience_level == 'mid':
-            advice_parts.append("You have solid experience. Consider specializing in a niche area or taking on leadership roles.")
-        else:
-            advice_parts.append("With your extensive experience, you should focus on mentoring others and strategic career moves.")
+        Please return a JSON object with the following structure:
+        {{
+            "advice": "comprehensive career advice text",
+            "nextSteps": ["list", "of", "specific", "next", "steps"],
+            "skillGaps": ["list", "of", "skill", "gaps", "to", "address"]
+        }}
 
-        if skill_count < 5:
-            advice_parts.append("Consider expanding your skill set to increase your marketability.")
-        elif skill_count > 10:
-            advice_parts.append("You have a diverse skill set. Consider deepening expertise in your strongest areas.")
+        Make the advice specific, actionable, and tailored to their profile and goals.
+        """
 
-        advice = " ".join(advice_parts)
-
-        # Generate next steps
-        next_steps = []
-        if experience_level == 'entry':
-            next_steps.extend([
-                "Complete relevant certifications in your field",
-                "Seek mentorship from experienced professionals",
-                "Take on challenging projects to build your portfolio"
-            ])
-        else:
-            next_steps.extend([
-                "Pursue advanced certifications or degrees",
-                "Network with industry leaders",
-                "Consider speaking at conferences or writing technical articles"
-            ])
-
-        # Identify skill gaps (simplified)
-        common_skills = ['communication', 'leadership', 'problem-solving', 'project-management']
-        user_skill_names = [s.lower() for s in skills]
-        skill_gaps = [skill for skill in common_skills if skill not in ' '.join(user_skill_names)]
+        response = call_openai_api(prompt, max_tokens=1500)
+        advice_data = parse_json_response(response)
 
         return CareerAdvice(
-            advice=advice,
-            nextSteps=next_steps,
-            skillGaps=skill_gaps
+            advice=advice_data.get('advice', 'Unable to generate advice'),
+            nextSteps=advice_data.get('nextSteps', []),
+            skillGaps=advice_data.get('skillGaps', [])
         )
 
     except Exception as e:
@@ -453,107 +252,82 @@ async def get_career_advice(request: CareerAdviceRequest):
 
 @app.post("/resume-feedback", response_model=ResumeFeedback)
 async def get_resume_feedback(request: ResumeFeedbackRequest):
-    """Analyze resume and provide improvement suggestions"""
+    """Analyze resume and provide improvement suggestions using AI"""
     try:
         resume_text = request.resumeText
-        job_description = request.jobDescription
+        job_description = request.jobDescription or "General job application"
 
-        analysis = analyze_resume_quality(resume_text)
+        prompt = f"""
+        Analyze the following resume and provide feedback for improvement.
 
-        # Calculate score based on various factors
-        score = 50  # Base score
+        Resume Text:
+        {resume_text}
 
-        if analysis['has_contact']: score += 10
-        if analysis['has_skills']: score += 15
-        if analysis['has_experience']: score += 15
-        if analysis['has_education']: score += 10
+        Target Job Description:
+        {job_description}
 
-        if analysis['length'] > 300: score += 5
-        elif analysis['length'] < 150: score -= 10
+        Please return a JSON object with the following structure:
+        {{
+            "overallScore": <number between 0-100>,
+            "strengths": ["list", "of", "resume", "strengths"],
+            "improvements": ["list", "of", "areas", "for", "improvement"],
+            "suggestions": ["list", "of", "specific", "suggestions"]
+        }}
 
-        score = min(100, max(0, score))
+        Evaluate the resume's effectiveness, clarity, completeness, and relevance to the job.
+        """
 
-        # Generate feedback
-        strengths = []
-        improvements = []
-        suggestions = []
-
-        if analysis['has_contact']:
-            strengths.append("Contact information is clearly provided")
-        else:
-            improvements.append("Add contact information (phone and email)")
-
-        if analysis['has_skills']:
-            strengths.append("Skills section is present")
-        else:
-            improvements.append("Add a dedicated skills section")
-
-        if analysis['has_experience']:
-            strengths.append("Work experience is documented")
-        else:
-            improvements.append("Add work experience section")
-
-        if analysis['length'] > 300:
-            strengths.append("Resume has good length and detail")
-        elif analysis['length'] < 150:
-            improvements.append("Resume seems too brief - add more details")
-
-        # Job-specific suggestions
-        if job_description:
-            job_skills = extract_skills(job_description)
-            resume_skills = extract_skills(resume_text)
-            missing_skills = set(job_skills) - set(resume_skills)
-
-            if missing_skills:
-                suggestions.append(f"Consider adding these job-relevant skills: {', '.join(list(missing_skills)[:3])}")
-
-        suggestions.extend([
-            "Use action verbs to describe your accomplishments",
-            "Quantify your achievements with numbers when possible",
-            "Tailor your resume for each job application",
-            "Keep it to 1-2 pages for most positions"
-        ])
+        response = call_openai_api(prompt, max_tokens=1500)
+        feedback_data = parse_json_response(response)
+        if not feedback_data or isinstance(feedback_data, dict) and feedback_data.get('error'):
+            raise HTTPException(status_code=500, detail=f"Error analyzing resume: {feedback_data.get('error', 'Invalid JSON response from AI')}" )
 
         return ResumeFeedback(
-            overallScore=score,
-            strengths=strengths,
-            improvements=improvements,
-            suggestions=suggestions
+            overallScore=int(feedback_data.get('overallScore', 50)),
+            strengths=feedback_data.get('strengths', []),
+            improvements=feedback_data.get('improvements', []),
+            suggestions=feedback_data.get('suggestions', [])
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error analyzing resume: {str(e)}")
 
 @app.post("/interview-prep", response_model=InterviewPrep)
 async def get_interview_prep(request: InterviewPrepRequest):
-    """Generate interview preparation materials"""
+    """Generate interview preparation materials using AI"""
     try:
         job_title = request.jobTitle
         user_profile = request.userProfile
 
-        questions = generate_interview_questions(job_title, user_profile)
+        prompt = f"""
+        Generate interview preparation materials for the following job title and user profile.
 
-        tips = [
-            "Research the company thoroughly before the interview",
-            "Prepare examples using the STAR method (Situation, Task, Action, Result)",
-            "Practice your answers out loud",
-            "Prepare thoughtful questions to ask the interviewer",
-            "Follow up with a thank-you email within 24 hours"
-        ]
+        Job Title: {job_title}
 
-        preparation_steps = [
-            "Review your resume and be ready to discuss any aspect of it",
-            "Research common interview questions for your field",
-            "Practice coding problems if applying for technical roles",
-            "Prepare for behavioral questions about past experiences",
-            "Think about your career goals and how this role fits"
-        ]
+        User Profile:
+        {json.dumps(user_profile, indent=2)}
+
+        Please return a JSON object with the following structure:
+        {{
+            "commonQuestions": ["list", "of", "common", "interview", "questions"],
+            "technicalQuestions": ["list", "of", "technical", "questions", "based", "on", "skills"],
+            "tips": ["list", "of", "interview", "tips"],
+            "preparationSteps": ["list", "of", "preparation", "steps"]
+        }}
+
+        Tailor the questions and advice to the job title and user's skills/experience.
+        """
+
+        response = call_openai_api(prompt, max_tokens=1500)
+        prep_data = parse_json_response(response)
 
         return InterviewPrep(
-            commonQuestions=questions['common'],
-            technicalQuestions=questions['technical'][:5],  # Limit to 5
-            tips=tips,
-            preparationSteps=preparation_steps
+            commonQuestions=prep_data.get('commonQuestions', []),
+            technicalQuestions=prep_data.get('technicalQuestions', []),
+            tips=prep_data.get('tips', []),
+            preparationSteps=prep_data.get('preparationSteps', [])
         )
 
     except Exception as e:
@@ -561,31 +335,39 @@ async def get_interview_prep(request: InterviewPrepRequest):
 
 @app.post("/course-recommendations", response_model=CourseRecommendation)
 async def get_course_recommendations(request: CourseRecommendationRequest):
-    """Recommend courses for skill development"""
+    """Recommend courses for skill development using AI"""
     try:
         user_profile = request.userProfile
         target_skills = request.targetSkills
 
-        user_skills = user_profile.get('skills', [])
-        skill_gaps = generate_skill_gaps(user_skills, target_skills)
+        prompt = f"""
+        Recommend courses and learning paths for the following user profile and target skills.
 
-        courses = recommend_courses(skill_gaps)
+        User Profile:
+        {json.dumps(user_profile, indent=2)}
 
-        # Generate learning path
-        learning_path = []
-        if skill_gaps:
-            learning_path.append(f"Start with foundational courses in: {', '.join(skill_gaps[:3])}")
-            learning_path.append("Practice with small projects to apply new skills")
-            learning_path.append("Join online communities for support and networking")
-            learning_path.append("Consider certifications to validate your learning")
-        else:
-            learning_path.append("Your skills are well-aligned with your targets")
-            learning_path.append("Focus on deepening expertise in your strongest areas")
-            learning_path.append("Consider advanced or specialized courses")
+        Target Skills:
+        {json.dumps(target_skills)}
+
+        Please return a JSON object with the following structure:
+        {{
+            "courses": [
+                {{"title": "Course Title", "platform": "Platform Name", "url": "course_url"}},
+                ...
+            ],
+            "learningPath": ["list", "of", "learning", "steps", "or", "path"]
+        }}
+
+        Recommend real, existing courses from platforms like Coursera, Udemy, edX, etc.
+        Focus on practical, highly-rated courses.
+        """
+
+        response = call_openai_api(prompt, max_tokens=1500)
+        course_data = parse_json_response(response)
 
         return CourseRecommendation(
-            courses=courses,
-            learningPath=learning_path
+            courses=course_data.get('courses', []),
+            learningPath=course_data.get('learningPath', [])
         )
 
     except Exception as e:
@@ -598,4 +380,5 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
     uvicorn.run(app, host="0.0.0.0", port=8000)

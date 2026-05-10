@@ -88,6 +88,11 @@ router.post('/login', async (req, res) => {
 // Get user profile
 router.get('/profile', require('../middleware/auth'), async (req, res) => {
   try {
+    // Validate userId
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid user session' });
+    }
+
     const user = await User.findById(req.user.userId).select('-password');
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
